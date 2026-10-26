@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 500px at 80% -10%, rgba(24, 76, 155, 0.18), transparent 60%),
+    radial-gradient(900px 420px at -10% 10%, rgba(227, 6, 19, 0.06), transparent 55%), #020617;
+  color: #e2e8f0;
+  font-family: Inter, system-ui, Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(24, 76, 155, 0.6);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 8px;
+  border: 2px solid #020617;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-slate-800 bg-slate-900/70 p-5 backdrop-blur transition-colors;
+  }
+  .card-hover {
+    @apply hover:-translate-y-0.5 hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/10;
+    transition:
+      transform 0.2s ease,
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn text-white shadow-md shadow-brand-500/25 hover:-translate-y-px hover:shadow-lg hover:shadow-brand-500/40;
+    background: linear-gradient(135deg, #184c9b, #2563eb 55%, #184c9b);
+    background-size: 160% 160%;
+    transition:
+      transform 0.15s ease,
+      box-shadow 0.2s ease,
+      background-position 0.4s ease;
+  }
+  .btn-primary:hover {
+    background-position: 90% 50%;
+  }
+  .btn-ghost {
+    @apply btn border border-slate-700 text-slate-200 hover:-translate-y-px hover:border-slate-500 hover:bg-slate-800;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .input {
+    @apply w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400;
+  }
+  .td {
+    @apply px-3 py-2 text-sm text-slate-200;
+  }
+}
+
+@layer utilities {
+  .animate-fade-up {
+    animation: fade-up 0.5s ease both;
+  }
+  .animate-fade-up-1 {
+    animation: fade-up 0.5s 0.08s ease both;
+  }
+  .animate-fade-up-2 {
+    animation: fade-up 0.5s 0.16s ease both;
+  }
+  .animate-fade-up-3 {
+    animation: fade-up 0.5s 0.24s ease both;
+  }
+  .animate-blob {
+    animation: blob 14s ease-in-out infinite alternate;
+  }
+  .animate-marquee {
+    animation: marquee 36s linear infinite;
+  }
+  .animate-marquee:hover {
+    animation-play-state: paused;
+  }
+  .live-dot {
+    position: relative;
+  }
+  .live-dot::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 9999px;
+    border: 2px solid currentcolor;
+    opacity: 0;
+    animation: ping-soft 1.8s ease-out infinite;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes blob {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(40px, 24px) scale(1.15);
+  }
+  100% {
+    transform: translate(-24px, 36px) scale(0.95);
+  }
+}
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes ping-soft {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.6);
+  }
+  80%,
+  100% {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+}
+
+.leaflet-container {
+  background: #0f172a;
+  font-family: inherit;
+}

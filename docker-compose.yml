@@ -1,0 +1,92 @@
+# Full stack: docker compose up -d --build   (values come from .env, see .env.example)
+# Database only (local dev, API/web run on the host): npm run db:up
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wnmp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wnmp}
+      POSTGRES_DB: ${POSTGRES_DB:-wnmp}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Secrets default to empty: with NODE_ENV=production (the default here) the API refuses to boot until they are set.
+      NODE_ENV: ${NODE_ENV:-production}
+      API_PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wnmp}:${POSTGRES_PASSWORD:-wnmp}@postgres:5432/${POSTGRES_DB:-wnmp}?schema=public
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:4000}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-}
+      RATE_LIMIT_HEAVY_PER_MIN: ${RATE_LIMIT_HEAVY_PER_MIN:-}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      RUN_DB_SETUP: ${RUN_DB_SETUP:-true}
+      ALLOW_DEMO_SEED: ${ALLOW_DEMO_SEED:-}
+      ALLOW_MOCK_PAYMENTS: ${ALLOW_MOCK_PAYMENTS:-}
+      ENABLE_MOCK_OPERATOR: ${ENABLE_MOCK_OPERATOR:-}
+      ALLOW_PRIVATE_OPERATOR_URLS: ${ALLOW_PRIVATE_OPERATOR_URLS:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY:-}
+      MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-}
+      XENDIT_SECRET_KEY: ${XENDIT_SECRET_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    ports:
+      - '127.0.0.1:${API_PORT:-4000}:4000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${WEB_PORT:-3000}:3000'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  pgdata:

@@ -1,0 +1,15 @@
+node_modules
+.pgdata
+.next
+out
+coverage
+dist
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.log
+.DS_Store
+npm-debug.log*

@@ -1,0 +1,1210 @@
+// Wholesale Network Marketplace Platform - database schema (PostgreSQL)
+// Conventions: snake_case tables via @@map, soft delete for business entities,
+// money as Decimal, bilingual text as { "id": "...", "en": "..." } Json, secrets stored encrypted.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums (state machines only; business vocabulary lives in tables)
+// ---------------------------------------------------------------------------
+
+enum Locale {
+  ID
+  EN
+}
+
+enum AccountStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum ApiAuthType {
+  NONE
+  API_KEY
+  BEARER
+  BASIC
+  OAUTH2_CLIENT_CREDENTIALS
+  HMAC
+}
+
+enum IntegrationStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  ERROR
+}
+
+enum SyncMode {
+  POLLING
+  WEBHOOK
+  HYBRID
+}
+
+enum SyncRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum LinkStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum AvailabilityState {
+  AVAILABLE
+  LOCKED
+  RESERVED
+  UNAVAILABLE
+}
+
+enum PricingRuleType {
+  BASE_OVERRIDE
+  VOLUME_DISCOUNT
+  TERM_DISCOUNT
+  CAPACITY_TIER
+  SURCHARGE
+  PROMOTION
+}
+
+enum GeospatialFormat {
+  KMZ
+  KML
+  GEOJSON
+}
+
+enum ParseStatus {
+  PENDING
+  PARSED
+  FAILED
+}
+
+enum ReservationStatus {
+  CART
+  LOCKED
+  AWAITING_PAYMENT
+  PAID
+  CONFIRMED
+  EXPIRED
+  CANCELLED
+  FAILED
+}
+
+enum LockStatus {
+  NONE
+  ACQUIRED
+  CONFIRMED
+  RELEASED
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PAID
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum AiAnalysisStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum WebhookSource {
+  PAYMENT_GATEWAY
+  OPERATOR_API
+}
+
+enum WebhookProcessStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum LedgerEventType {
+  USER_EVENT
+  OPERATOR_APPROVAL
+  API_CONFIG_CHANGE
+  API_SYNC
+  LINK_UPDATE
+  LINK_LOCK
+  RESERVATION
+  PAYMENT
+  REFUND
+  AI_ANALYSIS
+  ADMIN_ACTION
+  TICKET
+  ADDON_CHANGE
+  INSIGHT
+  WALLET
+  PROFILE
+  LINK_REQUEST
+  PREBUILD
+  REVIEW
+  DATA_EXPORT
+}
+
+enum LedgerStatus {
+  INITIATED
+  SUCCESS
+  FAILED
+  CANCELLED
+  REVERSED
+}
+
+// Iteration 2: demand tracking, telemetry, tickets, add-ons
+enum InteractionType {
+  SEARCH
+  VIEW
+  CART_ADD
+  RESERVE
+}
+
+enum LinkOpStatus {
+  UP
+  DOWN
+  DEGRADED
+}
+
+enum TicketSource {
+  BUYER
+  OPERATOR
+  SYSTEM
+}
+
+enum TicketKind {
+  DEGRADATION
+  OUTAGE
+  OTHER
+}
+
+enum TicketSeverity {
+  SEV1
+  SEV2
+  SEV3
+}
+
+enum TicketStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketUpdateType {
+  CREATED
+  STATUS_CHANGE
+  COMMENT
+  PUBLIC_REPLY
+  ESCALATED
+  SLA_BREACH
+}
+
+enum AddOnKind {
+  REDUNDANCY
+  CAPACITY_UPGRADE
+  MONITORING
+  PREMIUM_SLA
+  DDOS_PROTECTION
+  MANAGED_SERVICE
+  OTHER
+}
+
+// Iteration 3: profiles, wallet, notifications, link requests, pre-build products, reviews
+enum WalletEntryType {
+  TOPUP
+  CHARGE
+  REFUND
+  ADJUSTMENT
+}
+
+enum NotificationCategory {
+  PROMO
+  DISCOUNT
+  EARLY_BIRD
+  BILLING_ALERT
+  LINK_REQUEST
+  TICKET
+}
+
+enum LinkRequestStatus {
+  OPEN
+  IN_PROGRESS
+  FULFILLED
+  CLOSED
+}
+
+enum PrebuildStatus {
+  PLANNED
+  BUILDING
+  READY
+  CANCELLED
+}
+
+enum CommitmentStatus {
+  PLEDGED
+  CANCELLED
+  CONVERTED
+}
+
+// ---------------------------------------------------------------------------
+// Identity & RBAC (roles/permissions are data, not code)
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. ADMIN, PENYELENGGARA, PENYEWA (seeded, extensible)
+  name        Json // { "id": "...", "en": "..." }
+  description Json?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. link:read, link:write, operator:approve
+  description Json?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id              String        @id @default(cuid())
+  email           String        @unique
+  passwordHash    String?
+  fullName        String
+  phone           String?
+  locale          Locale        @default(ID)
+  status          AccountStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  roles           UserRole[]
+  sessions        Session[]
+  operatorProfile OperatorProfile?
+  buyerProfile    BuyerProfile?
+  reservations    Reservation[]
+  aiAnalyses      AiAnalysis[]
+  ledgerEntries   TransactionLog[]
+  interactions    LinkInteraction[]
+  reportedTickets LinkTicket[]
+  ticketUpdates   LinkTicketUpdate[]
+  notifications   Notification[]
+  notificationPrefs NotificationPreference[]
+  linkRequests    LinkRequest[]
+  linkRequestVotes LinkRequestVote[]
+  commitments     PrebuildCommitment[]
+  reviews         OperatorReview[]
+
+  @@map("users")
+}
+
+model UserRole {
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Tenants: operator (seller) and buyer organisations
+// ---------------------------------------------------------------------------
+
+model OperatorProfile {
+  id              String         @id @default(cuid())
+  userId          String         @unique
+  slug            String         @unique
+  legalName       String
+  displayName     String
+  description     Json? // bilingual
+  registrationNo  String? // NIB / NPWP
+  licenseNo       String? // telecom licence
+  contactEmail    String?
+  contactPhone    String?
+  website         String?
+  logoUrl         String?
+  countryCode     String         @default("ID")
+  timezone        String         @default("Asia/Jakarta")
+  defaultCurrency String         @default("IDR")
+  approvalStatus  ApprovalStatus @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  payoutAccount   Json? // encrypted at application level
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  deletedAt       DateTime?
+
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  apiConfigs     DynamicApiConfig[]
+  links          NetworkLink[]
+  geospatial     GeospatialData[]
+  pricingRules   PricingRule[]
+  ledgerEntries  TransactionLog[]
+  tickets        LinkTicket[]
+  addOns         AddOnService[]
+  insightReports SellerInsightReport[]
+  requestResponses LinkRequestResponse[]
+  prebuildProducts PrebuildProduct[]
+  reviews        OperatorReview[]
+
+  @@index([approvalStatus])
+  @@map("operator_profiles")
+}
+
+model BuyerProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  companyName     String
+  taxId           String?
+  billingAddress  Json?
+  billingEmail    String?
+  defaultCurrency String   @default("IDR")
+  monthlyBudget     Decimal? @db.Decimal(18, 2) // null = no budget alert
+  alertThresholdPct Int? // null = platform setting billing.alertThresholdPct
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  reservations  Reservation[]
+  walletEntries WalletEntry[]
+
+  @@map("buyer_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic API aggregator (Adapter Pattern configuration lives here)
+// ---------------------------------------------------------------------------
+
+model DynamicApiConfig {
+  id                  String            @id @default(cuid())
+  operatorProfileId   String
+  name                String
+  adapterKey          String            @default("generic-rest") // selects adapter implementation
+  baseUrl             String
+  authType            ApiAuthType       @default(NONE)
+  credentialsEnc      String? // AES-GCM envelope of tokens/keys/secrets; never returned by API
+  staticHeaders       Json?
+  endpoints           Json // { listLinks, getLink, lockLink, confirmLock, releaseLock, ... } paths + methods
+  fieldMapping        Json // operator JSON path -> platform field (latency, bandwidth, sla, price, availability, ...)
+  syncMode            SyncMode          @default(POLLING)
+  pollingIntervalSec  Int               @default(300)
+  rateLimitPerMin     Int?
+  timeoutMs           Int               @default(10000)
+  webhookSecretEnc    String? // verifies inbound operator webhooks
+  status              IntegrationStatus @default(PENDING)
+  isActive            Boolean           @default(true)
+  nextSyncAt          DateTime?
+  lastSyncedAt        DateTime?
+  consecutiveFailures Int               @default(0)
+  lastError           String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  syncRuns        ApiSyncRun[]
+  links           NetworkLink[]
+
+  @@index([operatorProfileId])
+  @@index([isActive, nextSyncAt]) // scheduler picks due configs
+  @@map("dynamic_api_configs")
+}
+
+model ApiSyncRun {
+  id           String        @id @default(cuid())
+  apiConfigId  String
+  trigger      String // SCHEDULE | WEBHOOK | MANUAL
+  status       SyncRunStatus @default(RUNNING)
+  startedAt    DateTime      @default(now())
+  finishedAt   DateTime?
+  durationMs   Int?
+  httpStatus   Int?
+  linksSeen    Int           @default(0)
+  linksCreated Int           @default(0)
+  linksUpdated Int           @default(0)
+  linksFailed  Int           @default(0)
+  errorMessage String?
+
+  apiConfig DynamicApiConfig @relation(fields: [apiConfigId], references: [id], onDelete: Cascade)
+
+  @@index([apiConfigId, startedAt])
+  @@map("api_sync_runs")
+}
+
+// ---------------------------------------------------------------------------
+// Network links, telemetry, pricing
+// ---------------------------------------------------------------------------
+
+model NetworkLink {
+  id                String            @id @default(cuid())
+  operatorProfileId String
+  apiConfigId       String?
+  externalId        String? // operator-side identifier used by the adapter
+  name              Json // bilingual
+  description       Json?
+  category          String // e.g. DARK_FIBER, WAVELENGTH, MPLS, IP_TRANSIT (free-form, driven by operator data)
+  status            LinkStatus        @default(DRAFT)
+  availability      AvailabilityState @default(AVAILABLE)
+
+  originName      String // route endpoints (PoP / city)
+  originLat       Float?
+  originLng       Float?
+  destinationName String
+  destinationLat  Float?
+  destinationLng  Float?
+  distanceKm      Float?
+
+  capacityMbps    Int?
+  availableMbps   Int?
+  latencyMs       Float?
+  slaPercent      Float?
+  redundancyScore Float?
+  basePrice       Decimal? @db.Decimal(18, 2)
+  priceUnit       String?  @default("MONTH") // MONTH | YEAR | MBPS_MONTH
+  currency        String   @default("IDR")
+  minTermMonths   Int?
+
+  attributes        Json? // any extra operator-provided technical attributes
+  geospatialDataId  String?
+  geometryFeatureId String? // which feature in the GeoJSON represents this route
+  lastSyncedAt      DateTime?
+  syncChecksum      String? // skip no-op updates on high-frequency polling
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  operatorProfile  OperatorProfile      @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  apiConfig        DynamicApiConfig?    @relation(fields: [apiConfigId], references: [id], onDelete: SetNull)
+  geospatialData   GeospatialData?      @relation(fields: [geospatialDataId], references: [id], onDelete: SetNull)
+  metrics          LinkMetricSnapshot[]
+  pricingRules     PricingRule[]
+  reservationItems ReservationItem[]
+  ledgerEntries    TransactionLog[]
+  interactions     LinkInteraction[]
+  tickets          LinkTicket[]
+  performance      LinkPerformance?
+  reviews          OperatorReview[]
+
+  @@unique([operatorProfileId, externalId])
+  @@index([status, availability])
+  @@index([originName, destinationName])
+  @@index([capacityMbps])
+  @@index([latencyMs])
+  @@index([basePrice])
+  @@map("network_links")
+}
+
+// Append-only time series for latency/availability history (feeds AI predictions)
+model LinkMetricSnapshot {
+  id             BigInt   @id @default(autoincrement())
+  networkLinkId  String
+  latencyMs      Float?
+  availableMbps  Int?
+  utilizationPct Float?
+  uptimePct      Float?
+  price          Decimal? @db.Decimal(18, 2)
+  recordedAt     DateTime @default(now())
+
+  // Iteration 2 telemetry (all optional: absent => "no data", never 0)
+  lossPct            Float?
+  opStatus           LinkOpStatus?
+  plannedMaintenance Boolean       @default(false)
+  isDemo             Boolean       @default(false) // DEMO SEED rows only
+
+  networkLink NetworkLink @relation(fields: [networkLinkId], references: [id], onDelete: Cascade)
+
+  @@index([networkLinkId, recordedAt])
+  @@index([recordedAt]) // retention purge
+  @@map("link_metric_snapshots")
+}
+
+model PricingRule {
+  id                String          @id @default(cuid())
+  operatorProfileId String
+  networkLinkId     String? // null = applies to all of the operator's links
+  name              String
+  type              PricingRuleType
+  conditions        Json? // { minCapacityMbps, minTermMonths, routes, ... }
+  adjustment        Json // { mode: "PERCENT" | "FIXED" | "OVERRIDE", value: number }
+  priority          Int             @default(100)
+  validFrom         DateTime?
+  validUntil        DateTime?
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  networkLink     NetworkLink?    @relation(fields: [networkLinkId], references: [id], onDelete: Cascade)
+
+  @@index([operatorProfileId, isActive])
+  @@index([networkLinkId])
+  @@map("pricing_rules")
+}
+
+// ---------------------------------------------------------------------------
+// Geospatial (KMZ/KML -> GeoJSON). Bounding box columns allow map viewport
+// queries without PostGIS; a PostGIS geometry column can be added via raw
+// migration later if spatial joins are required.
+// ---------------------------------------------------------------------------
+
+model GeospatialData {
+  id                String           @id @default(cuid())
+  operatorProfileId String
+  name              String
+  originalFileName  String?
+  sourceFormat      GeospatialFormat
+  storageKey        String? // object storage key of the uploaded KMZ/KML
+  fileSizeBytes     Int?
+  checksum          String?
+  parseStatus       ParseStatus      @default(PENDING)
+  parseError        String?
+  geoJson           Json? // FeatureCollection
+  featureCount      Int?
+  bboxMinLat        Float?
+  bboxMinLng        Float?
+  bboxMaxLat        Float?
+  bboxMaxLng        Float?
+  totalLengthKm     Float?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  links           NetworkLink[]
+
+  @@index([operatorProfileId])
+  @@index([bboxMinLat, bboxMinLng, bboxMaxLat, bboxMaxLng])
+  @@map("geospatial_data")
+}
+
+// ---------------------------------------------------------------------------
+// Reservation (cart + checkout), payments
+// ---------------------------------------------------------------------------
+
+model Reservation {
+  id             String            @id @default(cuid())
+  reference      String            @unique // human-readable, e.g. RSV-2026-000123
+  buyerUserId    String
+  buyerProfileId String?
+  status         ReservationStatus @default(CART)
+  currency       String            @default("IDR")
+  subtotal       Decimal           @default(0) @db.Decimal(18, 2)
+  taxAmount      Decimal           @default(0) @db.Decimal(18, 2)
+  totalAmount    Decimal           @default(0) @db.Decimal(18, 2)
+  expiresAt      DateTime? // cart/lock TTL; sweeper releases operator locks after this
+  notes          String?
+  isDemo         Boolean           @default(false) // DEMO SEED rows only
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  buyer         User              @relation(fields: [buyerUserId], references: [id], onDelete: Restrict)
+  buyerProfile  BuyerProfile?     @relation(fields: [buyerProfileId], references: [id], onDelete: SetNull)
+  items         ReservationItem[]
+  payments      Payment[]
+  ledgerEntries TransactionLog[]
+  tickets       LinkTicket[]
+  reviews       OperatorReview[]
+  walletEntries WalletEntry[]
+
+  @@index([buyerUserId, status])
+  @@index([status, expiresAt])
+  @@map("reservations")
+}
+
+model ReservationItem {
+  id              String     @id @default(cuid())
+  reservationId   String
+  networkLinkId   String
+  requestedMbps   Int?
+  termMonths      Int        @default(12)
+  unitPrice       Decimal    @db.Decimal(18, 2) // price snapshot after pricing rules
+  lineTotal       Decimal    @db.Decimal(18, 2)
+  appliedRules    Json? // which PricingRules produced unitPrice (audit)
+  lockStatus      LockStatus @default(NONE)
+  externalLockRef String? // token returned by operator API lock endpoint
+  lockExpiresAt   DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  networkLink NetworkLink @relation(fields: [networkLinkId], references: [id], onDelete: Restrict)
+
+  @@unique([reservationId, networkLinkId])
+  @@index([networkLinkId, lockStatus])
+  @@index([lockStatus, lockExpiresAt])
+  @@map("reservation_items")
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  reservationId  String
+  provider       String // midtrans | xendit | stripe (resolved from platform settings)
+  method         String?
+  status         PaymentStatus @default(PENDING)
+  amount         Decimal       @db.Decimal(18, 2)
+  currency       String        @default("IDR")
+  externalId     String? // provider transaction / invoice id
+  idempotencyKey String        @unique
+  checkoutUrl    String?
+  paidAt         DateTime?
+  expiresAt      DateTime?
+  failureReason  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  reservation   Reservation      @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  ledgerEntries TransactionLog[]
+
+  @@unique([provider, externalId])
+  @@index([reservationId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ---------------------------------------------------------------------------
+// AI link analysis
+// ---------------------------------------------------------------------------
+
+model AiAnalysis {
+  id               String           @id @default(cuid())
+  userId           String
+  prompt           String
+  locale           Locale           @default(EN)
+  provider         String // openai | anthropic
+  model            String
+  status           AiAnalysisStatus @default(PENDING)
+  linkSnapshot     Json? // exact link data sent to the LLM (reproducibility)
+  linkIds          String[]
+  result           Json? // structured: recommendations, cost-benefit, redundancy, latency prediction
+  rawResponse      String?
+  promptTokens     Int?
+  completionTokens Int?
+  errorMessage     String?
+  createdAt        DateTime         @default(now())
+  completedAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("ai_analyses")
+}
+
+// ---------------------------------------------------------------------------
+// Inbound webhooks (idempotency + replay) and runtime settings
+// ---------------------------------------------------------------------------
+
+model WebhookEvent {
+  id          String               @id @default(cuid())
+  source      WebhookSource
+  provider    String // payment provider key or operator apiConfigId
+  eventId     String? // provider's event id for de-duplication
+  signatureOk Boolean              @default(false)
+  payload     Json
+  status      WebhookProcessStatus @default(RECEIVED)
+  error       String?
+  receivedAt  DateTime             @default(now())
+  processedAt DateTime?
+
+  @@unique([source, provider, eventId])
+  @@index([status, receivedAt])
+  @@map("webhook_events")
+}
+
+model PlatformSetting {
+  key         String   @id // e.g. payment.provider, ai.provider, reservation.lock_ttl_seconds
+  value       Json
+  description String?
+  isSecret    Boolean  @default(false)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Immutable audit ledger. Append-only: a migration adds triggers rejecting
+// UPDATE/DELETE/TRUNCATE. Each row chains to the previous via SHA-256
+// (hash = sha256(prevHash || canonical row JSON)) for tamper evidence.
+// FKs use Restrict so referenced rows are soft-deleted, never removed.
+// ---------------------------------------------------------------------------
+
+model TransactionLog {
+  id                String          @id @default(cuid())
+  sequence          BigInt          @unique @default(autoincrement())
+  eventType         LedgerEventType
+  status            LedgerStatus
+  action            String // e.g. reservation.lock.acquired
+  actorUserId       String?
+  operatorProfileId String?
+  networkLinkId     String?
+  reservationId     String?
+  paymentId         String?
+  entityType        String?
+  entityId          String?
+  amount            Decimal?        @db.Decimal(18, 2)
+  currency          String?
+  externalRef       String?
+  requestPayload    Json? // secrets must be redacted before writing
+  responsePayload   Json?
+  message           String?
+  ipAddress         String?
+  userAgent         String?
+  prevHash          String?
+  hash              String          @unique
+  createdAt         DateTime        @default(now())
+
+  actor           User?            @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  operatorProfile OperatorProfile? @relation(fields: [operatorProfileId], references: [id], onDelete: Restrict)
+  networkLink     NetworkLink?     @relation(fields: [networkLinkId], references: [id], onDelete: Restrict)
+  reservation     Reservation?     @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  payment         Payment?         @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([eventType, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([networkLinkId, createdAt])
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([entityType, entityId])
+  @@map("transaction_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Iteration 2: demand signals, tickets, performance, add-ons, seller insights.
+// Raw SQL that Prisma cannot express (partial unique indexes, CHECKs, stats
+// functions, append-only trigger) lives in prisma/sql/*.sql and must be
+// re-applied after every `db:push`.
+// ---------------------------------------------------------------------------
+
+// Raw demand events (audit + aggregation source). Identity is admin-only.
+model LinkInteraction {
+  id            String          @id @default(cuid())
+  userId        String
+  networkLinkId String? // null for node-pair SEARCH
+  routeKey      String? // sorted nodeKey(a)|nodeKey(b)
+  type          InteractionType
+  minMbps       Int?
+  unmet         Boolean         @default(false) // SEARCH with zero eligible routes
+  counted       Boolean         @default(true) // false: seller/admin actor or per-day duplicate
+  countedKey    String?         @unique // userId|target|type|day; NULL when not counted (NULLs never collide)
+  isDemo        Boolean         @default(false) // DEMO SEED rows only
+  createdAt     DateTime        @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  networkLink NetworkLink? @relation(fields: [networkLinkId], references: [id], onDelete: Cascade)
+
+  @@index([networkLinkId, type, createdAt])
+  @@index([routeKey, createdAt])
+  @@index([userId, createdAt]) // throttle + admin audit
+  @@index([createdAt]) // retention purge
+  @@map("link_interactions")
+}
+
+model LinkTicket {
+  id                String         @id @default(cuid())
+  ticketNo          Int            @unique @default(autoincrement()) // human sequence
+  reference         String         @unique // e.g. TKT-2026-000123, built from ticketNo by the app
+  networkLinkId     String
+  operatorProfileId String
+  reporterUserId    String? // null for SYSTEM
+  reservationId     String?
+  source            TicketSource
+  kind              TicketKind
+  severity          TicketSeverity
+  status            TicketStatus   @default(OPEN)
+  title             String
+  description       String
+  ackDueAt          DateTime
+  resolveDueAt      DateTime
+  ackAt             DateTime?
+  resolvedAt        DateTime?
+  closedAt          DateTime?
+  ackBreachedAt     DateTime?
+  resolveBreachedAt DateTime?
+  incidentStartAt   DateTime? // SYSTEM tickets: first bad sample
+  incidentEndAt     DateTime? // SYSTEM tickets: first good sample
+  flapCount         Int            @default(0)
+  publicReply       Json? // { text, at, byUserId } right of reply, one per ticket
+  isDemo            Boolean        @default(false) // DEMO SEED rows only
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  networkLink     NetworkLink        @relation(fields: [networkLinkId], references: [id], onDelete: Restrict)
+  operatorProfile OperatorProfile    @relation(fields: [operatorProfileId], references: [id], onDelete: Restrict)
+  reporter        User?              @relation(fields: [reporterUserId], references: [id], onDelete: Restrict)
+  reservation     Reservation?       @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  updates         LinkTicketUpdate[]
+
+  @@index([networkLinkId, status])
+  @@index([networkLinkId, createdAt])
+  @@index([networkLinkId, kind, incidentStartAt])
+  @@index([operatorProfileId, status, createdAt])
+  @@index([reporterUserId, createdAt])
+  @@index([status, ackDueAt]) // SLA sweeper
+  @@index([status, resolveDueAt]) // SLA sweeper
+  @@map("link_tickets")
+}
+
+// Append-only (trigger in sql/003). Internal notes are hidden from buyers.
+model LinkTicketUpdate {
+  id            String           @id @default(cuid())
+  ticketId      String
+  actorUserId   String? // null for SYSTEM
+  type          TicketUpdateType
+  fromStatus    TicketStatus?
+  toStatus      TicketStatus?
+  message       String?
+  isInternal    Boolean          @default(false)
+  isPublicReply Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+
+  ticket LinkTicket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  actor  User?      @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
+  @@map("link_ticket_updates")
+}
+
+// Cached score + KPIs per link (recomputed by schedule). One row per link.
+model LinkPerformance {
+  networkLinkId String    @id
+  score         Int? // null while not rated
+  rated         Boolean   @default(false)
+  reason        String? // MIN_SAMPLES | MIN_COVERAGE | NO_TELEMETRY when not rated
+  components    Json? // { latency, availability, tickets, headroom }
+  basis         Json? // { windowDays, samples, coverageDays, includesDemo }
+  kpis          Json?
+  firstRatedAt  DateTime? // start of the seller-only preview period
+  computedAt    DateTime  @default(now())
+
+  networkLink NetworkLink @relation(fields: [networkLinkId], references: [id], onDelete: Cascade)
+
+  @@index([computedAt]) // batch recompute picks the stalest rows
+  @@map("link_performance")
+}
+
+model AddOnService {
+  id                   String    @id @default(cuid())
+  operatorProfileId    String
+  kind                 AddOnKind
+  name                 Json // bilingual
+  description          Json?
+  price                Decimal?  @db.Decimal(18, 2) // display only
+  priceUnit            String?
+  currency             String    @default("IDR")
+  applicableCategories String[]
+  isActive             Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  deletedAt            DateTime?
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+
+  @@index([operatorProfileId, isActive])
+  @@index([kind])
+  @@map("add_on_services")
+}
+
+model SellerInsightReport {
+  id                String   @id @default(cuid())
+  operatorProfileId String
+  windowStart       DateTime
+  windowEnd         DateTime
+  engine            String // rule-based | llm:<model>
+  facts             Json // deterministic sections: demand, addOns, improvements
+  narrative         Json? // { id, en } optional LLM text
+  includesDemo      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+
+  @@index([operatorProfileId, createdAt])
+  @@map("seller_insight_reports")
+}
+
+// ---------------------------------------------------------------------------
+// Iteration 3: buyer wallet, notifications, link requests, pre-build, reviews,
+// reference data
+// ---------------------------------------------------------------------------
+
+// Signed amounts: TOPUP/REFUND > 0, CHARGE < 0. Balance = SUM(amount).
+model WalletEntry {
+  id             String          @id @default(cuid())
+  buyerProfileId String
+  type           WalletEntryType
+  amount         Decimal         @db.Decimal(18, 2)
+  currency       String          @default("IDR")
+  reference      String?
+  description    Json? // bilingual
+  reservationId  String?
+  createdById    String?
+  isDemo         Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+
+  buyerProfile BuyerProfile @relation(fields: [buyerProfileId], references: [id], onDelete: Cascade)
+  reservation  Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([buyerProfileId, createdAt])
+  @@map("wallet_entries")
+}
+
+model NotificationPreference {
+  userId    String
+  category  NotificationCategory
+  enabled   Boolean              @default(true)
+  channels  String[] // IN_APP, EMAIL
+  filters   Json? // { cities: string[], operatorIds: string[], minDiscountPct: number }
+  updatedAt DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, category])
+  @@map("notification_preferences")
+}
+
+model Notification {
+  id         String               @id @default(cuid())
+  userId     String
+  category   NotificationCategory
+  title      Json // bilingual
+  body       Json? // bilingual
+  href       String?
+  entityType String?
+  entityId   String?
+  dedupeKey  String?              @unique
+  readAt     DateTime?
+  isDemo     Boolean              @default(false)
+  createdAt  DateTime             @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// Buyer "wish list": a route that does not exist yet, visible to every approved provider.
+model LinkRequest {
+  id              String            @id @default(cuid())
+  reference       String            @unique
+  requesterUserId String
+  originName      String
+  originLat       Float?
+  originLng       Float?
+  destinationName String
+  destinationLat  Float?
+  destinationLng  Float?
+  capacityMbps    Int
+  category        String?
+  termMonths      Int?
+  budgetMonthly   Decimal?          @db.Decimal(18, 2)
+  currency        String            @default("IDR")
+  neededBy        DateTime?
+  notes           String?
+  status          LinkRequestStatus @default(OPEN)
+  isDemo          Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  requester User                  @relation(fields: [requesterUserId], references: [id], onDelete: Cascade)
+  votes     LinkRequestVote[]
+  responses LinkRequestResponse[]
+  products  PrebuildProduct[]
+
+  @@index([status, createdAt])
+  @@index([originName, destinationName])
+  @@map("link_requests")
+}
+
+model LinkRequestVote {
+  requestId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  request LinkRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([requestId, userId])
+  @@map("link_request_votes")
+}
+
+model LinkRequestResponse {
+  id                String    @id @default(cuid())
+  requestId         String
+  operatorProfileId String
+  message           String
+  proposedPrice     Decimal?  @db.Decimal(18, 2)
+  etaDate           DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  request         LinkRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, operatorProfileId])
+  @@map("link_request_responses")
+}
+
+// A route the provider plans/builds; buyers pledge early to lock the early-bird price.
+model PrebuildProduct {
+  id                String         @id @default(cuid())
+  operatorProfileId String
+  linkRequestId     String?
+  name              Json // bilingual
+  description       Json?
+  category          String
+  originName        String
+  originLat         Float?
+  originLng         Float?
+  destinationName   String
+  destinationLat    Float?
+  destinationLng    Float?
+  capacityMbps      Int
+  targetReadyDate   DateTime
+  progressPct       Int            @default(0)
+  status            PrebuildStatus @default(PLANNED)
+  basePrice         Decimal        @db.Decimal(18, 2)
+  earlyBirdPrice    Decimal        @db.Decimal(18, 2)
+  earlyBirdUntil    DateTime
+  earlyBirdSlots    Int
+  minTermMonths     Int            @default(12)
+  currency          String         @default("IDR")
+  convertedLinkId   String?
+  isDemo            Boolean        @default(false)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+
+  operatorProfile OperatorProfile      @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  linkRequest     LinkRequest?         @relation(fields: [linkRequestId], references: [id], onDelete: SetNull)
+  commitments     PrebuildCommitment[]
+
+  @@index([status, targetReadyDate])
+  @@index([operatorProfileId])
+  @@map("prebuild_products")
+}
+
+model PrebuildCommitment {
+  id           String           @id @default(cuid())
+  productId    String
+  buyerUserId  String
+  capacityMbps Int?
+  termMonths   Int
+  lockedPrice  Decimal          @db.Decimal(18, 2)
+  status       CommitmentStatus @default(PLEDGED)
+  isDemo       Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  product PrebuildProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  buyer   User            @relation(fields: [buyerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, buyerUserId])
+  @@map("prebuild_commitments")
+}
+
+// One review per operator per confirmed reservation per buyer.
+model OperatorReview {
+  id                String    @id @default(cuid())
+  operatorProfileId String
+  reservationId     String
+  networkLinkId     String?
+  buyerUserId       String
+  rating            Int // 1..5 (CHECK constraint in sql/004)
+  comment           String?
+  reply             String?
+  repliedAt         DateTime?
+  isDemo            Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+
+  operatorProfile OperatorProfile @relation(fields: [operatorProfileId], references: [id], onDelete: Cascade)
+  reservation     Reservation     @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  networkLink     NetworkLink?    @relation(fields: [networkLinkId], references: [id], onDelete: SetNull)
+  buyer           User            @relation(fields: [buyerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, operatorProfileId, buyerUserId])
+  @@index([operatorProfileId, createdAt])
+  @@map("operator_reviews")
+}
+
+// Points of presence / cities offered in pickers (admin-managed, not hard-coded in the UI).
+model ReferenceLocation {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  province  String?
+  lat       Float
+  lng       Float
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("reference_locations")
+}
